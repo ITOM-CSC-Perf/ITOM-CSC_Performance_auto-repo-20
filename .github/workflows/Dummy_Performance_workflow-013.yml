@@ -1,0 +1,91 @@
+
+name: Provision Azure VM 13
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploymentID:
+        description: "Unique deployment ID (required, used only for tagging)"
+        required: true
+        type: string
+
+      vmName:
+        description: "Base name for VM and related resources"
+        required: false
+        default: "defaultvm"
+        type: string
+
+      resourceGroup:
+        description: "Resource Group where VM will be deployed"
+        required: true
+        default: "automationdonotdelete"
+        type: string
+
+      region:
+        description: "Azure region"
+        required: true
+        default: "westus"
+        type: string
+
+      azureCredentialsSecret:
+        description: "GitHub secret name that contains Azure credentials JSON"
+        required: false
+        default: "AZURE_CREDENTIALS"
+        type: string
+
+run-name: ${ github.workflow }-${ inputs.deploymentID }
+
+jobs:
+  create-vm 13:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Azure login using dynamic secret
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${ secrets[github.event.inputs.azureCredentialsSecret] }
+
+      - name: Provision Azure VM
+        run: |
+          # === Input Variables ===
+          DEPLOYMENT_ID="${ github.event.inputs.deploymentID }"
+          VM_NAME_PREFIX="${ github.event.inputs.vmName }"
+          RG="${ github.event.inputs.resourceGroup }"
+          LOCATION="${ github.event.inputs.region }"
+
+          # === Resource Naming (NO deploymentID in names) ===
+          VNET_NAME="${{VM_NAME_PREFIX}}-vnet"
+          SUBNET_NAME="${{VM_NAME_PREFIX}}-subnet"
+          NIC_NAME="${{VM_NAME_PREFIX}}-nic"
+          PUBLIC_IP_NAME="${{VM_NAME_PREFIX}}-pip"
+          VM_NAME="${{VM_NAME_PREFIX}}-vm"
+
+          # === Network Config ===
+          ADDRESS_PREFIX="10.0.0.0/16"
+          SUBNET_PREFIX="10.0.0.0/24"
+
+          # === VM Config ===
+          IMAGE_ID="/subscriptions/afcb0d04-e5dc-41bc-a1a5-1301e875b563/resourceGroups/CCOE-IMAGE-RG/providers/Microsoft.Compute/galleries/CCOE_Compute_Gallery1/images/ServiceNow_Ubuntu20_Image/versions/21.0.0"
+          VM_SIZE="Standard_D2s_v3"
+          STORAGE_TYPE="Standard_LRS"
+
+          echo "🚀 Creating Resource Group (if not exists)"
+          az group create --name "$RG" --location "$LOCATION" --tags deploymentID="$DEPLOYMENT_ID"
+
+          echo "🌐 Creating Virtual Network: $VNET_NAME"
+          az network vnet create             --resource-group "$RG"             --name "$VNET_NAME"             --address-prefix "$ADDRESS_PREFIX"             --subnet-name "$SUBNET_NAME"             --subnet-prefix "$SUBNET_PREFIX"             --tags deploymentID="$DEPLOYMENT_ID"
+
+          echo "🌐 Creating Public IP: $PUBLIC_IP_NAME"
+          az network public-ip create             --resource-group "$RG"             --name "$PUBLIC_IP_NAME"             --sku Standard             --allocation-method Static             --tags deploymentID="$DEPLOYMENT_ID"
+
+          echo "🌐 Creating NIC: $NIC_NAME"
+          az network nic create             --resource-group "$RG"             --name "$NIC_NAME"             --vnet-name "$VNET_NAME"             --subnet "$SUBNET_NAME"             --public-ip-address "$PUBLIC_IP_NAME"             --tags deploymentID="$DEPLOYMENT_ID"
+
+          echo "💻 Creating VM: $VM_NAME"
+          az vm create             --resource-group "$RG"             --name "$VM_NAME"             --nics "$NIC_NAME"             --image "$IMAGE_ID"             --size "$VM_SIZE"             --storage-sku "$STORAGE_TYPE"             --admin-username azureuser             --generate-ssh-keys             --tags deploymentID="$DEPLOYMENT_ID"
+
+          echo "✅ VM $VM_NAME created successfully in $RG ($LOCATION)"
+          echo "✅ Tagged with deploymentID=$DEPLOYMENT_ID"
